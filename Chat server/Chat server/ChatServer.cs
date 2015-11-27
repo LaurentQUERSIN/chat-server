@@ -10,8 +10,9 @@ using Stormancer.Core;
 using Stormancer.Plugins;
 using Stormancer.Server;
 
-public class ChatUserInfo
+public struct ChatUserInfo
 {
+    public long ClientId;
     public string User;
 }
 
@@ -56,19 +57,51 @@ public class ChatServer
     void OnUpdateInfo(Packet<IScenePeerClient> packet)
     {
         var info = packet.ReadObject<ChatUserInfo>();
-
         if (UsersInfos.ContainsKey(packet.Connection.Id) == true)
         {
             ChatUserInfo trash;
             UsersInfos.TryRemove(packet.Connection.Id, out trash);
         }
+        info.ClientId = packet.Connection.Id;
         UsersInfos.TryAdd(packet.Connection.Id, info);
+        _scene.Broadcast<ChatUserInfo>("UpdateInfo", info);
+    }
+
+    Task OnDisconnected(DisconnectedArgs args)
+    {
+        if (UsersInfos.ContainsKey(args.Peer.Id) == true)
+        {
+            ChatUserInfo temp;
+            UsersInfos.TryRemove(args.Peer.Id, out temp);
+
+            ChatMessageDTO dto = new ChatMessageDTO();
+            dto.UserInfo = temp;
+            dto.Message = args.Reason;
+            _scene.Broadcast<ChatMessageDTO>("DiscardInfo", dto, PacketPriority.MEDIUM_PRIORITY, PacketReliability.RELIABLE);
+        }
+        return Task.FromResult(true);
+    }
+
+    Task OnGetUsersInfos(RequestContext<IScenePeerClient> ctx)
+    {
+        var users = new List<ChatUserInfo>();
+
+        foreach(ChatUserInfo user in UsersInfos.Values)
+        {
+            users.Add(user);
+        }
+
+        ctx.SendValue<List<ChatUserInfo>>(users);
+
+        return Task.FromResult(true);
     }
 
     public ChatServer(ISceneHost scene)
     {
         _scene = scene;
+        _scene.AddProcedure("GetUsersInfos", OnGetUsersInfos);
         _scene.AddRoute("UpdateInfo", OnUpdateInfo);
         _scene.AddRoute("chat", OnMessageReceived);
+        _scene.Disconnected.Add(OnDisconnected);
     }
 }
